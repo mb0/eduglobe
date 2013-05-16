@@ -12,8 +12,9 @@ var Render3d = function(canvas) {
 	this.canvas = canvas;
 	this.gl = this.initGl(this.canvas);
 	this.prog = this.initProg(this.gl);
-	this.pprog = this.initProg(this.gl);
 	this.initBuffers(this.gl);
+	this.pfbuf = this.initFb(this.gl);
+	this.ppx = new Uint8Array(4);
 };
 Render3d.prototype = {
 	initGl: function(canvas) {
@@ -22,8 +23,31 @@ Render3d.prototype = {
 		gl.viewportHeight = canvas.height;
 		gl.clearColor(0.0, 0.0, 0.0, 0.0);
 		gl.enable(gl.DEPTH_TEST);
+		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
 		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
 		return gl;
+	},
+	initFb: function(gl) {
+		// renderbuffers have only 16bit internal storage.
+		// it does match the color range in the rainbox.
+		// we need to use a texture for colors.
+		var fbuf = this.gl.createFramebuffer();
+		var ftx = gl.createTexture();
+		gl.bindFramebuffer(gl.FRAMEBUFFER, fbuf);
+		gl.bindTexture(gl.TEXTURE_2D, ftx);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.viewportWidth, gl.viewportHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ftx, 0);
+		var rbuf = gl.createRenderbuffer();
+		gl.bindRenderbuffer(gl.RENDERBUFFER, rbuf);
+		gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, gl.viewportWidth, gl.viewportHeight);
+		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ftx, 0);
+		gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rbuf);
+		gl.bindTexture(gl.TEXTURE_2D, null);
+		gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		return fbuf;
 	},
 	initProg: function(gl) {
 		var prog = gl.createProgram();
@@ -66,6 +90,7 @@ Render3d.prototype = {
 		prog.modelViewMatrix = gl.getUniformLocation(prog, "modelViewMatrix");
 		prog.projectionMatrix = gl.getUniformLocation(prog, "projectionMatrix");
 		prog.texture = gl.getUniformLocation(prog, "texture");
+		gl.useProgram(prog);
 		return prog;
 	},
 	initBuffers: function(gl) {
@@ -73,7 +98,6 @@ Render3d.prototype = {
 		var lon, lonn = 30;
 		var radius = 2;
 		var positionData = [];
-		var normalData = [];
 		var textureData = [];
 		for (lat=0; lat <= latn; lat++) {
 			var theta = lat * Math.PI / latn;
@@ -84,7 +108,6 @@ Render3d.prototype = {
 				var x = Math.cos(phi) * sint;
 				var y = cost;
 				var z = Math.sin(phi) * sint;
-				normalData.push(x, y, z);
 				positionData.push(radius * x, radius * y, radius * z);
 				textureData.push(1 - (lon / lonn), 1 - (lat / latn));
 			}
@@ -118,31 +141,28 @@ Render3d.prototype = {
 		this.indexBuffer.numItems = indexData.length;
 		
 	},
-	initTexture: function(prog, img) {
+	initTexture: function(tx, img) {
 		var gl = this.gl;
-		prog.txdata = gl.createTexture();
-		prog.txdata.image = img;
-		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-		gl.bindTexture(gl.TEXTURE_2D, prog.txdata);
-		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, prog.txdata.image);
+		tx.image = img;
+		gl.bindTexture(gl.TEXTURE_2D, tx);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tx.image);
 		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 	        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
 	        gl.generateMipmap(gl.TEXTURE_2D);
 	        gl.bindTexture(gl.TEXTURE_2D, null);
 	},
-	render: function(prog) {
+	render: function(tx) {
 		var gl = this.gl;
-		prog = prog || this.prog;
-		gl.useProgram(prog);
+		var prog = this.prog;
+		var tx = tx || this.tx;
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		var pMatrix = mat4.create();
 		var mvMatrix = mat4.create();
-		var nMatrix = mat3.create();
 		mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
 		mat4.identity(mvMatrix);
 		mat4.translate(mvMatrix, [0, 0, -6]);
 		gl.activeTexture(gl.TEXTURE0);
-		gl.bindTexture(gl.TEXTURE_2D, prog.txdata);
+		gl.bindTexture(gl.TEXTURE_2D, tx);
 		gl.uniform1i(prog.texture, 0);
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
 		gl.vertexAttribPointer(prog.position, this.positionBuffer.itemSize, gl.FLOAT, false, 0, 0);
@@ -151,9 +171,6 @@ Render3d.prototype = {
 		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
 		gl.uniformMatrix4fv(prog.projectionMatrix, false, pMatrix);
 		gl.uniformMatrix4fv(prog.modelViewMatrix, false, mvMatrix);
-		mat4.toInverseMat3(mvMatrix, nMatrix);
-		mat3.transpose(nMatrix);
-		gl.uniformMatrix3fv(prog.normalMatrix, false, nMatrix);
 		gl.drawElements(gl.TRIANGLES, this.indexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
 	},
 };
@@ -166,26 +183,28 @@ var r = new Render3d(c3d);
 var world = new Image();
 world.src = "../world_day.jpg";
 world.onload = function() {
-	r.initTexture(r.prog, world);
+	r.tx = r.gl.createTexture();
+	r.initTexture(r.tx, world);
 	r.render();
 };
 
 var rainbox = new Image();
 rainbox.src = "rainbox_2048x1024.png";
 rainbox.onload = function() {
-	r.initTexture(r.pprog, rainbox);
+	r.ptx = r.gl.createTexture();
+	r.initTexture(r.ptx, rainbox);
 };
 
 c3d.onclick = function(e) {
 	var gl = r.gl;
-	r.render(r.pprog);
-	var pxls = new Uint8Array(4);
-	gl.readPixels(e.offsetX, e.offsetY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pxls);
-	r.render();
-	if (pxls[3] == 0) return;
-	var x = (pxls[2]>>4)<<8|pxls[0];
-	var y = (pxls[2]&0xf)<<8|pxls[1];
-	console.log(x, y, pxls[2], pxls[0], pxls[1]);
+	gl.bindFramebuffer(gl.FRAMEBUFFER, r.pfbuf);
+	r.render(r.ptx);
+	gl.readPixels(e.offsetX, e.offsetY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, r.ppx);
+	gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+	if (r.ppx[3] == 0) return;
+	var x = (r.ppx[2]>>4)<<8|r.ppx[0];
+	var y = (r.ppx[2]&0xf)<<8|r.ppx[1];
+	console.log("click on", x, y);
 };
 </script>
 </body>
