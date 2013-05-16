@@ -8,12 +8,11 @@
 <script src="../glMatrix-0.9.5.min.js"></script>
 <script>
 
-var Render3d = function(canvas, canvas2d) {
+var Render3d = function(canvas) {
 	this.canvas = canvas;
-	this.canvas2d = canvas2d;
-	
 	this.gl = this.initGl(this.canvas);
 	this.prog = this.initProg(this.gl);
+	this.pprog = this.initProg(this.gl);
 	this.initBuffers(this.gl);
 };
 Render3d.prototype = {
@@ -60,14 +59,12 @@ Render3d.prototype = {
 		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
 			throw new Error("could not link webgl program");
 		}
-		gl.useProgram(prog);
 		prog.uv = gl.getAttribLocation(prog, "uv");
 		gl.enableVertexAttribArray(prog.uv);
 		prog.position = gl.getAttribLocation(prog, "position");
 		gl.enableVertexAttribArray(prog.position);
 		prog.modelViewMatrix = gl.getUniformLocation(prog, "modelViewMatrix");
 		prog.projectionMatrix = gl.getUniformLocation(prog, "projectionMatrix");
-		prog.normalMatrix = gl.getUniformLocation(prog, "normalMatrix");
 		prog.texture = gl.getUniformLocation(prog, "texture");
 		return prog;
 	},
@@ -121,8 +118,22 @@ Render3d.prototype = {
 		this.indexBuffer.numItems = indexData.length;
 		
 	},
-	render: function() {
+	initTexture: function(prog, img) {
 		var gl = this.gl;
+		prog.txdata = gl.createTexture();
+		prog.txdata.image = img;
+		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+		gl.bindTexture(gl.TEXTURE_2D, prog.txdata);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, prog.txdata.image);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+	        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+	        gl.generateMipmap(gl.TEXTURE_2D);
+	        gl.bindTexture(gl.TEXTURE_2D, null);
+	},
+	render: function(prog) {
+		var gl = this.gl;
+		prog = prog || this.prog;
+		gl.useProgram(prog);
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		var pMatrix = mat4.create();
 		var mvMatrix = mat4.create();
@@ -131,18 +142,18 @@ Render3d.prototype = {
 		mat4.identity(mvMatrix);
 		mat4.translate(mvMatrix, [0, 0, -6]);
 		gl.activeTexture(gl.TEXTURE0);
-		gl.bindTexture(gl.TEXTURE_2D, this.texture);
-		gl.uniform1i(this.prog.texture, 0);
+		gl.bindTexture(gl.TEXTURE_2D, prog.txdata);
+		gl.uniform1i(prog.texture, 0);
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
-		gl.vertexAttribPointer(this.prog.position, this.positionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.vertexAttribPointer(prog.position, this.positionBuffer.itemSize, gl.FLOAT, false, 0, 0);
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
-		gl.vertexAttribPointer(this.prog.uv, this.textureBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.vertexAttribPointer(prog.uv, this.textureBuffer.itemSize, gl.FLOAT, false, 0, 0);
 		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
-		gl.uniformMatrix4fv(this.prog.projectionMatrix, false, pMatrix);
-		gl.uniformMatrix4fv(this.prog.modelViewMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prog.projectionMatrix, false, pMatrix);
+		gl.uniformMatrix4fv(prog.modelViewMatrix, false, mvMatrix);
 		mat4.toInverseMat3(mvMatrix, nMatrix);
 		mat3.transpose(nMatrix);
-		gl.uniformMatrix3fv(this.prog.normalMatrix, false, nMatrix);
+		gl.uniformMatrix3fv(prog.normalMatrix, false, nMatrix);
 		gl.drawElements(gl.TRIANGLES, this.indexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
 	},
 };
@@ -152,25 +163,25 @@ c3d.height = 450;
 document.body.appendChild(c3d);
 var r = new Render3d(c3d);
 
-var img = new Image();
-img.src = "rainbox_2048x1024.png";
-img.onload = function() {
-	var gl = r.gl;
-	r.texture = gl.createTexture();
-	r.texture.image = img;
-	gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-	gl.bindTexture(gl.TEXTURE_2D, r.texture);
-	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, r.texture.image);
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
-        gl.generateMipmap(gl.TEXTURE_2D);
-        gl.bindTexture(gl.TEXTURE_2D, null);
+var world = new Image();
+world.src = "../world_day.jpg";
+world.onload = function() {
+	r.initTexture(r.prog, world);
 	r.render();
 };
+
+var rainbox = new Image();
+rainbox.src = "rainbox_2048x1024.png";
+rainbox.onload = function() {
+	r.initTexture(r.pprog, rainbox);
+};
+
 c3d.onclick = function(e) {
 	var gl = r.gl;
+	r.render(r.pprog);
 	var pxls = new Uint8Array(4);
 	gl.readPixels(e.offsetX, e.offsetY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pxls);
+	r.render();
 	if (pxls[3] == 0) return;
 	var x = (pxls[2]>>4)<<8|pxls[0];
 	var y = (pxls[2]&0xf)<<8|pxls[1];
