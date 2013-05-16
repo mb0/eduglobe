@@ -28,23 +28,18 @@ Render3d.prototype = {
 		return gl;
 	},
 	initFb: function(gl) {
-		// renderbuffers have only 16bit internal storage.
-		// it does match the color range in the rainbox.
-		// we need to use a texture for colors.
+		// renderbuffers advertise only 16bit (RGBA4) internal storage
+		// but they seem to use 32bit internally.
 		var fbuf = this.gl.createFramebuffer();
-		var ftx = gl.createTexture();
+		var cbuf = gl.createRenderbuffer();
+		var dbuf = gl.createRenderbuffer();
 		gl.bindFramebuffer(gl.FRAMEBUFFER, fbuf);
-		gl.bindTexture(gl.TEXTURE_2D, ftx);
-		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.viewportWidth, gl.viewportHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
-		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ftx, 0);
-		var rbuf = gl.createRenderbuffer();
-		gl.bindRenderbuffer(gl.RENDERBUFFER, rbuf);
+		gl.bindRenderbuffer(gl.RENDERBUFFER, cbuf);
+		gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA4, gl.viewportWidth, gl.viewportHeight);
+		gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, cbuf);
+		gl.bindRenderbuffer(gl.RENDERBUFFER, dbuf);
 		gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, gl.viewportWidth, gl.viewportHeight);
-		gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ftx, 0);
-		gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rbuf);
-		gl.bindTexture(gl.TEXTURE_2D, null);
+		gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, dbuf);
 		gl.bindRenderbuffer(gl.RENDERBUFFER, null);
 		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 		return fbuf;
