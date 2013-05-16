@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>3d test</title>
+</head>
+<body>
+<script src="../glMatrix-0.9.5.min.js"></script>
+<script>
+
+var Render3d = function(canvas, canvas2d) {
+	this.canvas = canvas;
+	this.canvas2d = canvas2d;
+	
+	this.gl = this.initGl(this.canvas);
+	this.prog = this.initProg(this.gl);
+	this.initBuffers(this.gl);
+};
+Render3d.prototype = {
+	initGl: function(canvas) {
+		var gl = canvas.getContext("experimental-webgl", {preserveDrawingBuffer: true});
+		gl.viewportWidth = canvas.width;
+		gl.viewportHeight = canvas.height;
+		gl.clearColor(0.0, 0.0, 0.0, 0.0);
+		gl.enable(gl.DEPTH_TEST);
+		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+		return gl;
+	},
+	initProg: function(gl) {
+		var prog = gl.createProgram();
+		function initShader(type, src) {
+			var shader = gl.createShader(type);
+			gl.shaderSource(shader, src);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+				throw new Error("shader error "+ type +" "+ gl.getShaderInfoLog(shader));
+			}
+			gl.attachShader(prog, shader);
+		}
+		initShader(gl.VERTEX_SHADER, [
+			"attribute vec2 uv;",
+			"attribute vec3 position;",
+			"uniform mat4 modelViewMatrix;",
+			"uniform mat4 projectionMatrix;",
+			"varying vec2 vUv;",
+			"void main() {",
+			"	vUv = uv;",
+			"	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+			"}",
+		].join("\n"));
+		initShader(gl.FRAGMENT_SHADER, [
+			"precision mediump float;",
+			"varying vec2 vUv;",
+			"uniform sampler2D texture;",
+			"void main() {",
+			"	gl_FragColor = texture2D(texture, vUv);",
+			"}",
+		].join("\n"));
+		gl.linkProgram(prog);
+		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+			throw new Error("could not link webgl program");
+		}
+		gl.useProgram(prog);
+		prog.uv = gl.getAttribLocation(prog, "uv");
+		gl.enableVertexAttribArray(prog.uv);
+		prog.position = gl.getAttribLocation(prog, "position");
+		gl.enableVertexAttribArray(prog.position);
+		prog.modelViewMatrix = gl.getUniformLocation(prog, "modelViewMatrix");
+		prog.projectionMatrix = gl.getUniformLocation(prog, "projectionMatrix");
+		prog.normalMatrix = gl.getUniformLocation(prog, "normalMatrix");
+		prog.texture = gl.getUniformLocation(prog, "texture");
+		return prog;
+	},
+	initBuffers: function(gl) {
+		var lat, latn = 30;
+		var lon, lonn = 30;
+		var radius = 2;
+		var positionData = [];
+		var normalData = [];
+		var textureData = [];
+		for (lat=0; lat <= latn; lat++) {
+			var theta = lat * Math.PI / latn;
+			var sint = Math.sin(theta);
+			var cost = Math.cos(theta);
+			for (lon=0; lon <= lonn; lon++) {
+				var phi = lon * 2 * Math.PI / lonn;
+				var x = Math.cos(phi) * sint;
+				var y = cost;
+				var z = Math.sin(phi) * sint;
+				normalData.push(x, y, z);
+				positionData.push(radius * x, radius * y, radius * z);
+				textureData.push(1 - (lon / lonn), 1 - (lat / latn));
+			}
+		}
+		var indexData = [];
+		for (lat=0; lat < latn; lat++) {
+			for (lon=0; lon < lonn; lon++) {
+				var first = lat *(lonn +1) + lon;
+				var second = first + lonn +1
+				indexData.push(first, second, first+1);
+				indexData.push(second, second+1, first+1);
+			}
+		}
+		
+		this.positionBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positionData), gl.STATIC_DRAW);
+		this.positionBuffer.itemSize = 3;
+		this.positionBuffer.numItems = positionData.length / 3;
+		
+		this.textureBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureData), gl.STATIC_DRAW);
+		this.textureBuffer.itemSize = 2;
+		this.textureBuffer.numItems = textureData.length / 2;
+		
+		this.indexBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indexData), gl.STATIC_DRAW);
+		this.indexBuffer.itemSize = 1;
+		this.indexBuffer.numItems = indexData.length;
+		
+	},
+	render: function() {
+		var gl = this.gl;
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		var pMatrix = mat4.create();
+		var mvMatrix = mat4.create();
+		var nMatrix = mat3.create();
+		mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+		mat4.identity(mvMatrix);
+		mat4.translate(mvMatrix, [0, 0, -6]);
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_2D, this.texture);
+		gl.uniform1i(this.prog.texture, 0);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+		gl.vertexAttribPointer(this.prog.position, this.positionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
+		gl.vertexAttribPointer(this.prog.uv, this.textureBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+		gl.uniformMatrix4fv(this.prog.projectionMatrix, false, pMatrix);
+		gl.uniformMatrix4fv(this.prog.modelViewMatrix, false, mvMatrix);
+		mat4.toInverseMat3(mvMatrix, nMatrix);
+		mat3.transpose(nMatrix);
+		gl.uniformMatrix3fv(this.prog.normalMatrix, false, nMatrix);
+		gl.drawElements(gl.TRIANGLES, this.indexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+	},
+};
+var c3d = document.createElement("canvas");
+c3d.width = 750;
+c3d.height = 450;
+document.body.appendChild(c3d);
+var r = new Render3d(c3d);
+
+var img = new Image();
+img.src = "rainbox_2048x1024.png";
+img.onload = function() {
+	var gl = r.gl;
+	r.texture = gl.createTexture();
+	r.texture.image = img;
+	gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+	gl.bindTexture(gl.TEXTURE_2D, r.texture);
+	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, r.texture.image);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+	r.render();
+};
+c3d.onclick = function(e) {
+	var gl = r.gl;
+	var pxls = new Uint8Array(4);
+	gl.readPixels(e.offsetX, e.offsetY, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pxls);
+	if (pxls[3] == 0) return;
+	var x = (pxls[2]>>4)<<8|pxls[0];
+	var y = (pxls[2]&0xf)<<8|pxls[1];
+	console.log(x, y, pxls[2], pxls[0], pxls[1]);
+};
+</script>
+</body>
+</html>
