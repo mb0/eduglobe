@@ -35,6 +35,18 @@ var shuffel = function(array) {
 	}
 	return copy;
 };
+
+window.requestAnimationFrame = (function() {
+  return window.requestAnimationFrame ||
+         window.webkitRequestAnimationFrame ||
+         window.mozRequestAnimationFrame ||
+         window.oRequestAnimationFrame ||
+         window.msRequestAnimationFrame ||
+         function(callback) {
+           window.setTimeout(callback, 1000/60);
+         };
+})();
+
 var Polygon = function(data, box) {
 	this.data = data;
 	this.box = box;
@@ -100,11 +112,15 @@ var Layer = function(data) {
 var Map = function(w, h) {
 	this.w = w;
 	this.h = h;
+	this.bg = new Image();
 	this.layers = [];
 	this.onclick = null;
 };
 
 Map.prototype = {
+	loadBg: function(href) {
+		this.bg.src = href;
+	},
 	// equirectangular projection
 	projectPoly: function(poly) {
 		var box = new BBox();
@@ -156,6 +172,30 @@ Map.prototype = {
 		}
 		return changed;
 	},
+	draw: function(ctx) {
+		if (this.bg.width) {
+			ctx.drawImage(this.bg, 0, 0);
+		}
+		ctx.lineWidth = 0.4;
+		ctx.strokeStyle = "#FF0000";
+		ctx.fillStyle = "rgba(60,60,60,.2)";
+		for (var i=0; i < this.layers.length; i++) {
+			var l = this.layers[i];
+			var over = l == this.overlayer;
+			if (over) {
+				ctx.fillStyle = "rgba(255,255,255,.3)";
+			}
+			ctx.beginPath();
+			for (var j=0; j < l.mpoly.length; j++) {
+				l.mpoly[j].draw(ctx);
+			}
+			ctx.fill();
+			ctx.stroke();
+			if (over) {
+				ctx.fillStyle = "rgba(60,60,60,.2)";
+			}
+		}
+	},
 };
 
 var Render2d = function(canvas, map) {
@@ -164,47 +204,18 @@ var Render2d = function(canvas, map) {
 	this.scale = 0.5;
 	this.offset = {x: 0, y: 0};
 	this.ctx = canvas.getContext("2d");
-	this.bg = null;
 	this.update = false;
 };
 Render2d.prototype = {
-	loadBg: function(href) {
-		var r = this;
-		this.bg = new Image();
-		this.bg.src = href;
-		this.bg.onload = function() {
-			r.render();
-		};
-		return this.bg;
-	},
 	render: function() {
+		if (!this.update) {
+			return;
+		}
 		this.update = false;
 		this.ctx.save();
 		this.ctx.scale(this.scale, this.scale);
 		this.ctx.translate(-this.offset.x, -this.offset.y);
-		if (this.bg) {
-			this.ctx.drawImage(this.bg, 0, 0);
-		}
-		this.ctx.lineWidth = 0.4;
-		this.ctx.strokeStyle = "#FF0000";
-		this.ctx.fillStyle = "rgba(60,60,60,.2)";
-		var i, l;
-		for (i=0; i < this.map.layers.length; i++) {
-			l = this.map.layers[i];
-			var over = l == this.map.overlayer;
-			if (over) {
-				this.ctx.fillStyle = "rgba(255,255,255,.3)";
-			}
-			this.ctx.beginPath();
-			for (var j=0; j < l.mpoly.length; j++) {
-				l.mpoly[j].draw(this.ctx);
-			}
-			this.ctx.fill();
-			this.ctx.stroke();
-			if (over) {
-				this.ctx.fillStyle = "rgba(60,60,60,.2)";
-			}
-		}
+		this.map.draw(this.ctx);
 		this.ctx.restore();
 	},
 	move: function(dx, dy) {
@@ -220,7 +231,6 @@ Render2d.prototype = {
 			y = Math.min(this.map.h-this.canvas.height/this.scale, y);
 			this.offset.y = Math.max(0, y);
 		}
-		if (this.update) this.render();
 	},
 	click: function(ox, oy) {
 		var mx = ox/this.scale + this.offset.x;
@@ -231,9 +241,7 @@ Render2d.prototype = {
 		var mx = ox/this.scale + this.offset.x;
 		var my = oy/this.scale + this.offset.y;
 		var changed = this.map.over(mx, my);
-		if (changed) {
-			this.render();
-		}
+		this.update =  this.update || changed;
 	},
 	zoom: function(delta, ox, oy) {
 		var px = (ox/this.scale + this.offset.x) / this.map.w;
@@ -245,9 +253,274 @@ Render2d.prototype = {
 		var fy = py * this.map.h - oy/this.scale;
 		this.offset.x = Math.max(0, Math.min(this.map.w-this.canvas.width/this.scale, fx));
 		this.offset.y = Math.max(0, Math.min(this.map.h-this.canvas.height/this.scale, fy));
-		this.render();
+		this.update = true;
 	},
 };
+
+var Render3d = function(canvas, map) {
+	this.canvas = canvas;
+	this.map = map;
+	this.update = false;
+	this.canvas2d = document.createElement("canvas");
+	this.canvas2d.width = map.w;
+	this.canvas2d.height = map.h;
+	this.ctx = this.canvas2d.getContext("2d");
+	this.gl = this.initGl(this.canvas);
+	this.prog = this.initProg(this.gl);
+	this.initBuffers(this.gl);
+	this.tx = this.gl.createTexture();
+	this.tx.image = this.canvas2d;
+	this.pMatrix = mat4.create();
+	this.mvMatrix = mat4.create();
+	this.nMatrix = mat3.create();
+	mat4.perspective(this.pMatrix, 45, canvas.width / canvas.height, 0.1, 100.0);
+	this.cam = [0, 0, 2]; // rotx, roty in deg and distance
+};
+Render3d.prototype = {
+	initGl: function(canvas) {
+		var gl = canvas.getContext("experimental-webgl");
+		gl.viewportWidth = canvas.width;
+		gl.viewportHeight = canvas.height;
+		gl.enable(gl.DEPTH_TEST);
+		gl.clearColor(0.0, 0.0, 0.0, 1.0);
+		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+		return gl;
+	},
+	initProg: function(gl) {
+		var prog = gl.createProgram();
+		function initShader(type, src) {
+			var shader = gl.createShader(type);
+			gl.shaderSource(shader, src);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+				throw new Error("shader error "+ type +" "+ gl.getShaderInfoLog(shader));
+			}
+			gl.attachShader(prog, shader);
+		}
+		initShader(gl.VERTEX_SHADER, [
+			"attribute vec2 uv;",
+			"attribute vec3 position;",
+			"attribute vec3 normal;",
+			"uniform mat4 modelViewMatrix;",
+			"uniform mat4 projectionMatrix;",
+			"uniform mat3 normalMatrix;",
+			"varying vec2 vUv;",
+			"varying vec3 vNormal;",
+			"void main() {",
+			"	vUv = uv;",
+			'	vNormal = normalize(normalMatrix * normal);',
+			"	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+			"}",
+		].join("\n"));
+		initShader(gl.FRAGMENT_SHADER, [
+			"precision mediump float;",
+			"uniform sampler2D texture;",
+			"varying vec2 vUv;",
+			"varying vec3 vNormal;",
+			"void main() {",
+			"	vec3 diffuse = texture2D(texture, vUv).xyz;",
+			"	float intensity = 1.05 - dot(vNormal, vec3(0.0, 0.0, 1.0));",
+			"	vec3 atmosphere = vec3(1.0, 1.0, 1.0) * pow(intensity, 3.0);",
+			"	gl_FragColor = vec4(atmosphere + diffuse, 1.0);",
+			"}",
+		].join("\n"));
+		gl.linkProgram(prog);
+		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+			throw new Error("could not link webgl program");
+		}
+		gl.useProgram(prog);
+		prog.uv = gl.getAttribLocation(prog, "uv");
+		gl.enableVertexAttribArray(prog.uv);
+		prog.position = gl.getAttribLocation(prog, "position");
+		gl.enableVertexAttribArray(prog.position);
+		prog.normal = gl.getAttribLocation(prog, "normal");
+		gl.enableVertexAttribArray(prog.normal);
+		prog.modelViewMatrix = gl.getUniformLocation(prog, "modelViewMatrix");
+		prog.projectionMatrix = gl.getUniformLocation(prog, "projectionMatrix");
+		prog.normalMatrix = gl.getUniformLocation(prog, "normalMatrix");
+		prog.texture = gl.getUniformLocation(prog, "texture");
+		return prog;
+	},
+	initBuffers: function(gl) {
+		var lat, latn = 30;
+		var lon, lonn = 30;
+		var radius = 1;
+		var positionData = [];
+		var normalData = [];
+		var textureData = [];
+		for (lat=0; lat <= latn; lat++) {
+			var theta = lat * Math.PI / latn;
+			var sint = Math.sin(theta);
+			var cost = Math.cos(theta);
+			for (lon=0; lon <= lonn; lon++) {
+				var phi = lon * 2 * Math.PI / lonn;
+				phi = (phi-Math.PI/2) % (2*Math.PI);
+				var x = Math.cos(phi) * sint;
+				var y = cost;
+				var z = Math.sin(phi) * sint;
+				normalData.push(x, y, z);
+				positionData.push(radius * x, radius * y, radius * z);
+				textureData.push(1 - (lon / lonn), 1 - (lat / latn));
+			}
+		}
+		var indexData = [];
+		for (lat=0; lat < latn; lat++) {
+			for (lon=0; lon < lonn; lon++) {
+				var first = lat *(lonn +1) + lon;
+				var second = first + lonn +1;
+				indexData.push(first, second, first+1);
+				indexData.push(second, second+1, first+1);
+			}
+		}
+		
+		this.normalBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.normalBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalData), gl.STATIC_DRAW);
+		this.normalBuffer.itemSize = 3;
+		this.normalBuffer.numItems = normalData.length / 3;
+		
+		this.positionBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positionData), gl.STATIC_DRAW);
+		this.positionBuffer.itemSize = 3;
+		this.positionBuffer.numItems = positionData.length / 3;
+		
+		this.textureBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureData), gl.STATIC_DRAW);
+		this.textureBuffer.itemSize = 2;
+		this.textureBuffer.numItems = textureData.length / 2;
+		
+		this.indexBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indexData), gl.STATIC_DRAW);
+		this.indexBuffer.itemSize = 1;
+		this.indexBuffer.numItems = indexData.length;
+		
+	},
+	initTexture: function(gl) {
+		gl.bindTexture(gl.TEXTURE_2D, this.tx);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.tx.image);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+		gl.bindTexture(gl.TEXTURE_2D, null);
+	},
+	render: function() {
+		if (!this.update) {
+			return;
+		}
+		this.update = false;
+		
+		this.ctx.save();
+		this.map.draw(this.ctx);
+		this.ctx.restore();
+		this.initTexture(this.gl);
+		
+		var gl = this.gl;
+		
+		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_2D, this.tx);
+		gl.uniform1i(this.prog.texture, 0);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+		gl.vertexAttribPointer(this.prog.position, this.positionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
+		gl.vertexAttribPointer(this.prog.uv, this.textureBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.normalBuffer);
+		gl.vertexAttribPointer(this.prog.normal, this.normalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+		
+		gl.uniformMatrix4fv(this.prog.projectionMatrix, false, this.pMatrix);
+		gl.uniformMatrix4fv(this.prog.modelViewMatrix, false, this.calcMv());
+		mat3.fromMat4(this.nMatrix, this.mvMatrix);
+		mat3.invert(this.nMatrix, this.nMatrix);
+		mat3.transpose(this.nMatrix, this.nMatrix);
+		gl.uniformMatrix3fv(this.prog.normalMatrix, false, this.nMatrix);
+		
+		gl.drawElements(gl.TRIANGLES, this.indexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+	},
+	calcMv: function() {
+		this.mvMatrix = mat4.create();
+		mat4.identity(this.mvMatrix);
+		mat4.translate(this.mvMatrix, this.mvMatrix, [0, 0, -this.cam[2]]);
+		mat4.rotate(this.mvMatrix, this.mvMatrix, this.cam[0]*Math.PI/180, [1, 0, 0]);
+		mat4.rotate(this.mvMatrix, this.mvMatrix, this.cam[1]*Math.PI/180, [0, 1, 0]);
+		return this.mvMatrix;
+	},
+	move: function(dx, dy) {
+		this.cam[1] = (this.cam[1]+360+dx*(this.cam[2]/-30))%360;
+		this.cam[0] = Math.max(-65, Math.min(65, this.cam[0]+dy*(this.cam[2]/-30)));
+		this.update = true;
+	},
+	unproject: function(x, y, z, pmvi) {
+		var dest = [x*2/this.gl.viewportWidth-1, -y*2/this.gl.viewportHeight+1, z*2-1, 1.0];
+		vec4.transformMat4(dest, dest, pmvi);
+		if (!dest[3]) return null;
+		vec3.scale(dest, dest, 1/dest[3]);
+		return dest;
+	},
+	traceDist: function(orig, dir) {
+		var c = vec3.create();
+		vec3.scale(c, orig, -1);
+		var pc = vec3.dot(dir, c);
+		var cc = vec3.dot(c, c);
+		var val = pc*pc - cc + 1;
+		if (val < 0) {
+			//console.log("val < 0", val);
+			return null;
+		}
+		val = Math.sqrt(val);
+		return Math.min(pc+val, pc-val);
+	},
+	mouseToMap: function(x, y) {
+		var pmvi = mat4.create();
+		mat4.multiply(pmvi, this.pMatrix, this.calcMv());
+		mat4.invert(pmvi, pmvi);
+		var orig = this.unproject(x, y, 1, pmvi);
+		var dest = this.unproject(x, y, 0, pmvi);
+		if (orig === null || dest === null) {
+			//console.log("orig|dest === null");
+			return null;
+		}
+		var dir = vec3.create();
+		vec3.subtract(dir, orig, dest);
+		vec3.normalize(dir, dir);
+		var dist = this.traceDist(orig, dir);
+		if (dist === null) {
+			return null;
+		}
+		var p = vec3.create();
+		vec3.add(p, orig, vec3.scale(dest, dir, dist));
+		var lon = Math.asin(p[0] / Math.sqrt(1 - p[1] * p[1])) * 180/ Math.PI;
+		if (p[2] < -0.01) lon = 180 - lon;
+		if (lon > 180) lon -= 360;
+		var lat = Math.asin(p[1]) * 180 / Math.PI;
+		return [((lon+180)/360)*this.map.w, ((-lat+90)/180)*this.map.h];
+	},
+	click: function(ox, oy) {
+		var m = this.mouseToMap(ox, oy);
+		if (m === null) {
+			return;
+		}
+		this.map.click(m[0], m[1]);
+	},
+	over: function(ox, oy) {
+		var m = this.mouseToMap(ox, oy);
+		if (m === null) {
+			return;
+		}
+		var changed = this.map.over(m[0], m[1]);
+		this.update =  this.update || changed;
+	},
+	zoom: function(delta, ox, oy) {
+		this.cam[2] = Math.max(1.5, Math.min(4, this.cam[2]-delta));
+		this.update = true;
+	},
+};
+
 var Select = function(game) {
 	this.game = game;
 	this.game.state = this;
@@ -296,7 +569,7 @@ Quiz.prototype = {
 						break;
 					}
 				}
-				this.game.renderer.render();
+				this.game.renderer.update = true;
 			}
 			if (this.layers.length > 0) {
 				this.game.ui.instruct("correct! now find", this.layers[0].name);
@@ -311,7 +584,6 @@ Quiz.prototype = {
 	},
 };
 var Control = function(game) {
-	var lastover = 0;
 	window.addEventListener("keydown", function(e) {
 		switch (e.keyIdentifier) {
 		case "Up":
@@ -325,12 +597,10 @@ var Control = function(game) {
 		}
 	});
 	game.canvas.addEventListener("mousemove", function(e) {
-		if (e.timeStamp > lastover+50) {
-			lastover = e.timeStamp;
-			game.renderer.over(e.offsetX, e.offsetY);
-		}
+		game.renderer.over(e.offsetX, e.offsetY);
 	});
 	game.canvas.addEventListener("mousewheel", function(e) {
+		e.preventDefault();
 		var sign = e.wheelDelta < 0 ? -1 : 1;
 		game.renderer.zoom(sign * 0.25, e.offsetX, e.offsetY);
 	});
@@ -387,16 +657,23 @@ var Game = function(cont) {
 	this.canvas = document.createElement("canvas");
 	this.canvas.width = 750;
 	this.canvas.height = 450;
-	this.renderer = new Render2d(this.canvas, this.map);
-	this.renderer.loadBg("static/world_day.jpg");
+	layout.section.appendChild(this.canvas);
+	this.renderer = new Render3d(this.canvas, this.map);
 	this.state = null;
 	var g = this;
+	this.map.loadBg("static/world_day.jpg");
+	this.map.bg.onload = function() {
+		g.renderer.update = true;
+	};
 	this.map.onclick = function(l, x, y) {
 		if (g.state) g.state.clickLayer(l);
 	};
 	this.ui = new UI(layout.header, this);
-	layout.section.appendChild(this.canvas);
 	Control(this);
+	(function tick() {
+		window.requestAnimationFrame(tick);
+		g.renderer.render();
+	})();
 };
 Game.prototype = {
 	start: function(id) {
@@ -421,8 +698,8 @@ Game.prototype = {
 		for (var i=0; i < data.Layers.length; i++) {
 			this.map.add(data.Layers[i]);
 		}
-		this.renderer.render();
 		this.state.start();
+		this.renderer.update = true;
 	},
 };
 new Game(document.body).start();
