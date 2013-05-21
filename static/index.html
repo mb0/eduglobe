@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>3d test</title>
+</head>
+<body>
+<script src="gl-matrix-2.2.0.min.js"></script>
+<script>
+
+var Render3d = function(canvas) {
+	this.canvas = canvas;
+	this.gl = this.initGl(this.canvas);
+	this.prog = this.initProg(this.gl);
+	this.initBuffers(this.gl);
+	// rotx, roty in deg and distance
+	this.cam = [0, -90, 2];
+};
+Render3d.prototype = {
+	initGl: function(canvas) {
+		var gl = canvas.getContext("experimental-webgl", {preserveDrawingBuffer: true});
+		gl.viewportWidth = canvas.width;
+		gl.viewportHeight = canvas.height;
+		gl.clearColor(0.0, 0.0, 0.0, 0.0);
+		gl.enable(gl.DEPTH_TEST);
+		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+		return gl;
+	},
+	initProg: function(gl) {
+		var prog = gl.createProgram();
+		function initShader(type, src) {
+			var shader = gl.createShader(type);
+			gl.shaderSource(shader, src);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+				throw new Error("shader error "+ type +" "+ gl.getShaderInfoLog(shader));
+			}
+			gl.attachShader(prog, shader);
+		}
+		initShader(gl.VERTEX_SHADER, [
+			"attribute vec2 uv;",
+			"attribute vec3 position;",
+			"uniform mat4 modelViewMatrix;",
+			"uniform mat4 projectionMatrix;",
+			"varying vec2 vUv;",
+			"void main() {",
+			"	vUv = uv;",
+			"	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);",
+			"}",
+		].join("\n"));
+		initShader(gl.FRAGMENT_SHADER, [
+			"precision mediump float;",
+			"varying vec2 vUv;",
+			"uniform sampler2D texture;",
+			"void main() {",
+			"	gl_FragColor = texture2D(texture, vUv);",
+			"}",
+		].join("\n"));
+		gl.linkProgram(prog);
+		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+			throw new Error("could not link webgl program");
+		}
+		prog.uv = gl.getAttribLocation(prog, "uv");
+		gl.enableVertexAttribArray(prog.uv);
+		prog.position = gl.getAttribLocation(prog, "position");
+		gl.enableVertexAttribArray(prog.position);
+		prog.modelViewMatrix = gl.getUniformLocation(prog, "modelViewMatrix");
+		prog.projectionMatrix = gl.getUniformLocation(prog, "projectionMatrix");
+		prog.texture = gl.getUniformLocation(prog, "texture");
+		gl.useProgram(prog);
+		return prog;
+	},
+	initBuffers: function(gl) {
+		var lat, latn = 30;
+		var lon, lonn = 40;
+		var radius = 1;
+		var positionData = [];
+		var textureData = [];
+		for (lat=0; lat <= latn; lat++) {
+			var theta = lat * Math.PI / latn;
+			var sint = Math.sin(theta);
+			var cost = Math.cos(theta);
+			for (lon=0; lon <= lonn; lon++) {
+				var phi = lon * 2 * Math.PI / lonn;
+				phi = (phi-Math.PI/2) % (2*Math.PI);
+				var x = Math.cos(phi) * sint;
+				var y = cost;
+				var z = Math.sin(phi) * sint;
+				positionData.push(radius * x, radius * y, radius * z);
+				textureData.push(1 - (lon / lonn), 1 - (lat / latn));
+			}
+		}
+		var indexData = [];
+		for (lat=0; lat < latn; lat++) {
+			for (lon=0; lon < lonn; lon++) {
+				var first = lat *(lonn +1) + lon;
+				var second = first + lonn +1
+				indexData.push(first, second, first+1);
+				indexData.push(second, second+1, first+1);
+			}
+		}
+		
+		this.positionBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positionData), gl.STATIC_DRAW);
+		this.positionBuffer.itemSize = 3;
+		this.positionBuffer.numItems = positionData.length / 3;
+		
+		this.textureBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureData), gl.STATIC_DRAW);
+		this.textureBuffer.itemSize = 2;
+		this.textureBuffer.numItems = textureData.length / 2;
+		
+		this.indexBuffer = gl.createBuffer();
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indexData), gl.STATIC_DRAW);
+		this.indexBuffer.itemSize = 1;
+		this.indexBuffer.numItems = indexData.length;
+		
+	},
+	initTexture: function(tx, img) {
+		var gl = this.gl;
+		tx.image = img;
+		gl.bindTexture(gl.TEXTURE_2D, tx);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tx.image);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+	        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+	        gl.generateMipmap(gl.TEXTURE_2D);
+	        gl.bindTexture(gl.TEXTURE_2D, null);
+	},
+	render: function(tx) {
+		var gl = this.gl, prog = this.prog;
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		var pMatrix = mat4.create();
+		mat4.perspective(pMatrix, 45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0);
+		var mvMatrix = mat4.create();
+		mat4.identity(mvMatrix);
+		mat4.translate(mvMatrix, mvMatrix, [0, 0, -this.cam[2]]);
+		mat4.rotate(mvMatrix, mvMatrix, this.cam[0]*Math.PI/180, [1, 0, 0]);
+		mat4.rotate(mvMatrix, mvMatrix, this.cam[1]*Math.PI/180, [0, 1, 0]);
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_2D, this.tx);
+		gl.uniform1i(prog.texture, 0);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+		gl.vertexAttribPointer(prog.position, this.positionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.textureBuffer);
+		gl.vertexAttribPointer(prog.uv, this.textureBuffer.itemSize, gl.FLOAT, false, 0, 0);
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+		gl.uniformMatrix4fv(prog.projectionMatrix, false, pMatrix);
+		gl.uniformMatrix4fv(prog.modelViewMatrix, false, mvMatrix);
+		gl.drawElements(gl.TRIANGLES, this.indexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+	},
+};
+var c3d = document.createElement("canvas");
+c3d.width = 750;
+c3d.height = 450;
+document.body.appendChild(c3d);
+var r = new Render3d(c3d);
+
+var world = new Image();
+world.src = "world_day.jpg";
+world.onload = function() {
+	r.tx = r.gl.createTexture();
+	r.initTexture(r.tx, world);
+	r.render();
+};
+function getMvMatrix() {
+	var mvMatrix = mat4.create();
+	mat4.identity(mvMatrix);
+	mat4.translate(mvMatrix, mvMatrix, [0, 0, -r.cam[2]]);
+	mat4.rotate(mvMatrix, mvMatrix, r.cam[0]*Math.PI/180, [1, 0, 0]);
+	mat4.rotate(mvMatrix, mvMatrix, r.cam[1]*Math.PI/180, [0, 1, 0]);
+	return mvMatrix;
+}
+function getPMatrix(vw, vh) {
+	var pMatrix = mat4.create();
+	mat4.perspective(pMatrix, 45, vw / vh, 0.1, 100.0);
+	return pMatrix;
+}
+function getMvpiMatrix() {
+	var mvpi = mat4.create();
+	mat4.invert(mvpi, mat4.multiply(mvpi, getPMatrix(vw, vh), getMvMatrix()));
+	return mvpi;
+}
+function unproject(x,y,z, mvpi) {
+	var vw = c3d.width, vh = c3d.height;
+	var dest = [x*2/vw-1, -y*2/vh+1, z*2-1, 1.0];
+	vec4.transformMat4(dest, dest, mvpi)
+	if (!dest[3]) return null;
+	vec3.scale(dest, dest, 1/dest[3]);
+	return dest;
+}
+function traceDist(orig, dir) {
+	var c = vec3.create();
+	vec3.scale(c, orig, -1);
+	var pc = vec3.dot(dir, c);
+	var cc = vec3.dot(c, c);
+	var val = pc*pc - cc + 1;
+	if (val < 0) {
+		return null;
+	}
+	val = Math.sqrt(val);
+	return Math.min(pc+val, pc-val);
+}
+function meh(x, y) {
+	var vw = c3d.width, vh = c3d.height;
+	var mvpi = mat4.create();
+	mat4.invert(mvpi, mat4.multiply(mvpi, getPMatrix(vw, vh), getMvMatrix()));
+	
+	console.log("click on", x, y);
+	var orig = unproject(x, y, 0, mvpi);
+	var dest = unproject(x, y, 1, mvpi);
+	if (!orig || !dest) {
+		console.log("null", orig, dest);
+		return null;
+	}
+	var dir = vec3.create();
+	vec3.subtract(dir, orig, dest);
+	vec3.normalize(dir, dir);
+	console.log("orig, dir", orig, dir);
+	var dist = traceDist(orig, dir);
+	console.log(dist);
+	if (dist == null) return;
+	var bod = vec3.create();
+	vec3.add(bod, orig, vec3.scale(dest, dir, dist));
+	console.log("bod", bod);
+	var lon = Math.asin(bod[0] / Math.sqrt(1 - bod[1] * bod[1])) * 180/ Math.PI;
+	//if (bod[2] <-0.1) lon += 180;
+	if (lon > 180) lon -= 360;
+	var lat = Math.asin(bod[1]) * 180 / Math.PI;
+	lat = Math.round(lat * 100000) / 100000;
+	lon = Math.round(lon * 100000) / 100000;
+	console.log("latlon", lat, lon);
+}
+c3d.onclick = function(e) {
+	meh(e.offsetX, e.offsetY);
+};
+</script>
+</body>
+</html>
