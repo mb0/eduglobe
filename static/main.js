@@ -207,6 +207,7 @@ var Render2d = function(canvas, map) {
 	this.update = false;
 };
 Render2d.prototype = {
+	dim: 2,
 	render: function() {
 		if (!this.update) {
 			return;
@@ -274,15 +275,16 @@ var Render3d = function(canvas, map) {
 	this.mvMatrix = mat4.create();
 	this.nMatrix = mat3.create();
 	mat4.perspective(this.pMatrix, 45, canvas.width / canvas.height, 0.1, 100.0);
-	this.cam = [0, 0, 2]; // rotx, roty in deg and distance
+	this.cam = [0, 0, 2.25]; // rotx, roty in deg and distance
 };
 Render3d.prototype = {
+	dim: 3,
 	initGl: function(canvas) {
 		var gl = canvas.getContext("experimental-webgl");
 		gl.viewportWidth = canvas.width;
 		gl.viewportHeight = canvas.height;
 		gl.enable(gl.DEPTH_TEST);
-		gl.clearColor(0.0, 0.0, 0.0, 1.0);
+		gl.clearColor(1.0, 1.0, 1.0, 1.0);
 		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
 		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
 		return gl;
@@ -402,8 +404,8 @@ Render3d.prototype = {
 	initTexture: function(gl) {
 		gl.bindTexture(gl.TEXTURE_2D, this.tx);
 		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.tx.image);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 		gl.bindTexture(gl.TEXTURE_2D, null);
 	},
 	render: function() {
@@ -469,7 +471,6 @@ Render3d.prototype = {
 		var cc = vec3.dot(c, c);
 		var val = pc*pc - cc + 1;
 		if (val < 0) {
-			//console.log("val < 0", val);
 			return null;
 		}
 		val = Math.sqrt(val);
@@ -482,7 +483,6 @@ Render3d.prototype = {
 		var orig = this.unproject(x, y, 1, pmvi);
 		var dest = this.unproject(x, y, 0, pmvi);
 		if (orig === null || dest === null) {
-			//console.log("orig|dest === null");
 			return null;
 		}
 		var dir = vec3.create();
@@ -516,7 +516,7 @@ Render3d.prototype = {
 		this.update =  this.update || changed;
 	},
 	zoom: function(delta, ox, oy) {
-		this.cam[2] = Math.max(1.5, Math.min(4, this.cam[2]-delta));
+		this.cam[2] = Math.max(1.25, Math.min(2.5, this.cam[2]-delta));
 		this.update = true;
 	},
 };
@@ -528,10 +528,11 @@ var Select = function(game) {
 };
 Select.prototype = {
 	start: function() {
-		this.game.ui.instruct("select a region to start the quiz");
+		this.game.ui.instruct("select a region to start the quiz.");
 	},
 	clickLayer: function(l) {
 		this.game.start(l.id);
+		this.game.ui.report(l.name, "quiz started!");
 	},
 };
 var Quiz = function(game, id) {
@@ -539,8 +540,8 @@ var Quiz = function(game, id) {
 	this.game.state = this;
 	this.id = id;
 	this.game.loadMapdata("country_"+ id +".json");
-	this.round = 0;
-	this.fails = 0;
+	this.rounds = 0;
+	this.errors = 0;
 	this.startTime = 0;
 	this.layers = [];
 };
@@ -555,6 +556,7 @@ Quiz.prototype = {
 		}
 		// and shuffel countries
 		this.layers = shuffel(layers);
+		this.rounds = this.layers.length;
 		this.startTime = Date.now();
 		this.game.ui.instruct("find", this.layers[0].name);
 	},
@@ -572,18 +574,28 @@ Quiz.prototype = {
 				this.game.renderer.update = true;
 			}
 			if (this.layers.length > 0) {
-				this.game.ui.instruct("correct! now find", this.layers[0].name);
+				this.game.ui.report("correct!", "--", this.report());
+				this.game.ui.instruct("find", this.layers[0].name);
 			} else {
-				this.game.ui.instruct("congratulations! you won!");
+				var sec = ((Date.now() - this.startTime)/1000)|0;
+				this.game.ui.report("congratulations! you won after "+ sec +"s with "+ this.errors +" errors.");
 				this.game.start();
 			}
 		} else { // fail
-			this.fails++;
-			this.game.ui.instruct("sorry this is", l.name, "... find", this.layers[0].name);
+			this.errors++;
+			this.game.ui.report("sorry you clicked on", l.name, "--", this.report());
 		}
+	},
+	report: function() {
+		var round = this.rounds-this.layers.length+1;
+		var sec = ((Date.now() - this.startTime)/1000)|0;
+		return "round "+ round +"/"+ this.rounds + " after "+ sec +"s with "+ this.errors +" errors";
 	},
 };
 var Control = function(game) {
+	window.addEventListener("resize", function() {
+		console.log("resize");
+	});
 	window.addEventListener("keydown", function(e) {
 		switch (e.keyIdentifier) {
 		case "Up":
@@ -641,25 +653,38 @@ var Layout = function(cont) {
 	this.section = document.createElement("section");
 	cont.appendChild(this.section);
 };
-var UI = function(cont) {
+var UI = function(cont, game) {
 	this.cont = cont;
+	this.reports = document.createElement("div");
+	this.cont.appendChild(this.reports);
 	this.instructions = document.createElement("div");
 	this.cont.appendChild(this.instructions);
+	this.report("welcome to eduglobe!");
+	this.controls = document.createElement("div");
+	this.cont.appendChild(this.controls);
+	var changeRenderer = document.createElement("button");
+	changeRenderer.innerHTML = "change to 2d";
+	changeRenderer.addEventListener("click", function() {
+		changeRenderer.innerHTML = "change to "+ (game.renderer.dim > 2 ? "3d" : "2d");
+		game.init(game.renderer.dim > 2 ? Render2d : Render3d);
+	});
+	this.controls.appendChild(changeRenderer);
 };
 UI.prototype = {
-	instruct: function(msg, args) {
+	instruct: function(msgs) {
 		this.instructions.innerHTML = Array.prototype.join.call(arguments, " ");
+	},
+	report: function(msgs) {
+		this.reports.innerHTML = Array.prototype.join.call(arguments, " ");
 	},
 };
 var Game = function(cont) {
-	var layout = new Layout(cont);
+	this.layout = new Layout(cont);
 	this.map = new Map(2048, 1024);
-	this.canvas = document.createElement("canvas");
-	this.canvas.width = 750;
-	this.canvas.height = 450;
-	layout.section.appendChild(this.canvas);
-	this.renderer = new Render3d(this.canvas, this.map);
+	this.canvas = null;
+	this.renderer = null;
 	this.state = null;
+	this.init(Render3d);
 	var g = this;
 	this.map.loadBg("static/world_day.jpg");
 	this.map.bg.onload = function() {
@@ -668,14 +693,27 @@ var Game = function(cont) {
 	this.map.onclick = function(l, x, y) {
 		if (g.state) g.state.clickLayer(l);
 	};
-	this.ui = new UI(layout.header, this);
-	Control(this);
+	this.ui = new UI(this.layout.header, this);
 	(function tick() {
 		window.requestAnimationFrame(tick);
-		g.renderer.render();
+		if (g.renderer !== null) {
+			g.renderer.render();
+		}
 	})();
 };
 Game.prototype = {
+	init: function(rendererType) {
+		if (this.canvas !== null) {
+			this.layout.section.removeChild(this.canvas);
+		}
+		this.canvas = document.createElement("canvas");
+		this.canvas.width = 800;
+		this.canvas.height = 500;
+		this.layout.section.appendChild(this.canvas);
+		this.renderer = new rendererType(this.canvas, this.map);
+		Control(this);
+		this.renderer.update = true;
+	},
 	start: function(id) {
 		this.map.clear();
 		if (id === undefined) {
