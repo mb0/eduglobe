@@ -213,6 +213,7 @@ Render2d.prototype = {
 			return;
 		}
 		this.update = false;
+		this.ctx.clearRect(0,0,this.canvas.width, this.canvas.height);
 		this.ctx.save();
 		this.ctx.scale(this.scale, this.scale);
 		this.ctx.translate(-this.offset.x, -this.offset.y);
@@ -528,9 +529,18 @@ var Select = function(game) {
 };
 Select.prototype = {
 	start: function() {
+		// filter antarctic
+		var layers = this.game.map.layers;
+		for (var i=0; i<layers.length; i++) {
+			if (layers[i].id === "0") {
+				layers.splice(i, 1);
+				break;
+			}
+		}
 		this.game.ui.instruct("select a region to start the quiz.");
 	},
 	clickLayer: function(l) {
+		if (l.id === "0") return;
 		this.game.start(l.id);
 		this.game.ui.report(l.name, "quiz started!");
 	},
@@ -593,9 +603,6 @@ Quiz.prototype = {
 	},
 };
 var Control = function(game) {
-	window.addEventListener("resize", function() {
-		console.log("resize");
-	});
 	window.addEventListener("keydown", function(e) {
 		switch (e.keyIdentifier) {
 		case "Up":
@@ -616,35 +623,65 @@ var Control = function(game) {
 		var sign = e.wheelDelta < 0 ? -1 : 1;
 		game.renderer.zoom(sign * 0.25, e.offsetX, e.offsetY);
 	});
-	var dragctx, dragging, drop;
-	game.canvas.addEventListener("mousedown", function(e) {
-		dragctx = {
-			x: e.offsetX,
-			y: e.offsetY,
-			t: e.timeStamp + 150,
-			c: false,
-		};
+	var dragctx, drag, dragging, drop;
+	setxy = function(e, ctx) {
+		var t = e;
+		if (e.targetTouches && e.targetTouches.length) {
+			t = e.targetTouches[0];
+		} else if (e.changedTouches && e.changedTouches.length) {
+			t = e.changedTouches[0];
+		}
+		ctx.x = t.clientX;
+		ctx.y = t.clientY;
+	};
+	getdist = function(e) {
+		var dx = e.touches[0].clientX-e.touches[1].clientX;
+		var dy = e.touches[0].clientY-e.touches[1].clientY;
+		return dx * dx + dy * dy;
+	};
+	drag = function(e) {
+		e.preventDefault();
+		dragctx = { t: e.timeStamp + 150, c: false, pinch: false};
+		setxy(e, dragctx);
+		if (e.touches && e.touches.length > 1) {
+			dragctx.pinch = true;
+			dragctx.dist = getdist(e);
+		}
 		window.addEventListener("mousemove", dragging);
+		window.addEventListener("touchmove", dragging);
 		window.addEventListener("mouseup", drop);
-	});
+		window.addEventListener("touchend", drop);
+	};
 	dragging = function(e) {
-		if (dragctx.t > e.timeStamp) {
+		if (!dragctx.pinch && dragctx.t > e.timeStamp) {
 			return;
 		}
-		game.renderer.move(dragctx.x - e.offsetX, dragctx.y - e.offsetY);
-		dragctx.x = e.offsetX;
-		dragctx.y = e.offsetY;
-		dragctx.c = true;
+		if (dragctx.pinch) {
+			var dist = getdist(e);
+			var sign = dist > dragctx.dist ? -1 : 1;
+			game.renderer.zoom(sign * 0.01, dragctx.x, dragctx.y);
+		} else {
+			var x = dragctx.x, y = dragctx.y;
+			setxy(e, dragctx);
+			game.renderer.move(x - dragctx.x, y - dragctx.y);
+			dragctx.c = true;
+		}
 	};
 	drop = function(e) {
-		if (!dragctx.c) {
+		e.preventDefault();
+		if (!dragctx.pinch && !dragctx.c) {
+			setxy(e, dragctx);
 			if (e.target == game.canvas) {
-				game.renderer.click(e.offsetX, e.offsetY);
+				game.renderer.click(dragctx.x, dragctx.y);
 			}
 		}
 		window.removeEventListener("mousemove", dragging);
+		window.removeEventListener("touchmove", dragging);
 		window.removeEventListener("mouseup", drop);
+		window.removeEventListener("touchend", drop);
 	};
+	game.canvas.addEventListener("mousedown", drag);
+	game.canvas.addEventListener("touchstart", drag);
 	return game;
 };
 var Layout = function(cont) {
@@ -663,7 +700,7 @@ var UI = function(cont, game) {
 	this.controls = document.createElement("div");
 	this.cont.appendChild(this.controls);
 	var changeRenderer = document.createElement("button");
-	changeRenderer.innerHTML = "change to 2d";
+	changeRenderer.innerHTML = "change to " +(game.renderer.dim > 2 ? "2d" : "3d");
 	changeRenderer.addEventListener("click", function() {
 		changeRenderer.innerHTML = "change to "+ (game.renderer.dim > 2 ? "3d" : "2d");
 		game.init(game.renderer.dim > 2 ? Render2d : Render3d);
@@ -684,7 +721,7 @@ var Game = function(cont) {
 	this.canvas = null;
 	this.renderer = null;
 	this.state = null;
-	this.init(Render3d);
+	this.init(Render2d);
 	var g = this;
 	this.map.loadBg("static/world_day.jpg");
 	this.map.bg.onload = function() {
