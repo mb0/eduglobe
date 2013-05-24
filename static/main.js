@@ -35,7 +35,22 @@ var shuffel = function(array) {
 	}
 	return copy;
 };
-
+var supports = (function() {
+	var r = {canvas:false, webgl: false};
+	var c = document.createElement("canvas"),ctx;
+	if (!!c.getContext) {
+		try {
+			ctx = c.getContext("experimental-webgl");
+			if (!!ctx) {
+				r.webgl = r.canvas = true;
+				return r;
+			}
+			ctx = c.getContext("2d");
+			r.canvas = !!ctx;
+		} catch(e){}
+	}
+	return r;
+})();
 window.requestAnimationFrame = (function() {
   return window.requestAnimationFrame ||
          window.webkitRequestAnimationFrame ||
@@ -658,7 +673,7 @@ var Control = function(game) {
 		}
 		if (dragctx.pinch) {
 			var dist = getdist(e);
-			var sign = dist > dragctx.dist ? -1 : 1;
+			var sign = dist < dragctx.dist ? -1 : 1;
 			game.renderer.zoom(sign * 0.01, dragctx.x, dragctx.y);
 		} else {
 			var x = dragctx.x, y = dragctx.y;
@@ -699,13 +714,15 @@ var UI = function(cont, game) {
 	this.report("welcome to eduglobe!");
 	this.controls = document.createElement("div");
 	this.cont.appendChild(this.controls);
-	var changeRenderer = document.createElement("button");
-	changeRenderer.innerHTML = "change to " +(game.renderer.dim > 2 ? "2d" : "3d");
-	changeRenderer.addEventListener("click", function() {
-		changeRenderer.innerHTML = "change to "+ (game.renderer.dim > 2 ? "3d" : "2d");
-		game.init(game.renderer.dim > 2 ? Render2d : Render3d);
-	});
-	this.controls.appendChild(changeRenderer);
+	if (supports.webgl === true) {
+		var changeRenderer = document.createElement("button");
+		changeRenderer.innerHTML = "change to " +(game.renderer.dim > 2 ? "2d" : "3d");
+		changeRenderer.addEventListener("click", function() {
+			changeRenderer.innerHTML = "change to "+ (game.renderer.dim > 2 ? "3d" : "2d");
+			game.init(game.renderer.dim > 2 ? Render2d : Render3d);
+		});
+		this.controls.appendChild(changeRenderer);
+	}
 };
 UI.prototype = {
 	instruct: function(msgs) {
