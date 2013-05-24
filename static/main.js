@@ -235,18 +235,24 @@ Render2d.prototype = {
 		this.map.draw(this.ctx);
 		this.ctx.restore();
 	},
-	move: function(dx, dy) {
-		if (dx) {
-			this.update = true;
-			var x = this.offset.x + dx/this.scale;
-			x = Math.min(this.map.w-this.canvas.width/this.scale, x);
-			this.offset.x = Math.max(0, x);
+	setOffset: function(x,y) {
+		var max = this.canvas.width/this.scale;
+		if (this.map.w >= max) {
+			this.offset.x = Math.max(0, Math.min(this.map.w-max, x));
+		} else {
+			this.offset.x = Math.max(this.map.w-max, Math.min(0, x));
 		}
-		if (dy) {
+		max = this.canvas.height/this.scale;
+		if (this.map.h >= max) {
+			this.offset.y = Math.max(0, Math.min(this.map.h-max, y));
+		} else {
+			this.offset.y = Math.max(this.map.h-max, Math.min(0, y));
+		}
+	},
+	move: function(dx, dy) {
+		if (dx || dy) {
 			this.update = true;
-			var y = this.offset.y + dy/this.scale;
-			y = Math.min(this.map.h-this.canvas.height/this.scale, y);
-			this.offset.y = Math.max(0, y);
+			this.setOffset(this.offset.x + dx/this.scale, this.offset.y + dy/this.scale);
 		}
 	},
 	click: function(ox, oy) {
@@ -265,11 +271,12 @@ Render2d.prototype = {
 		var py = (oy/this.scale + this.offset.y) / this.map.h;
 		// scale
 		this.scale = Math.max(0.5, Math.min(6, this.scale + delta));
-		// fix offset
-		var fx = px * this.map.w - ox/this.scale;
-		var fy = py * this.map.h - oy/this.scale;
-		this.offset.x = Math.max(0, Math.min(this.map.w-this.canvas.width/this.scale, fx));
-		this.offset.y = Math.max(0, Math.min(this.map.h-this.canvas.height/this.scale, fy));
+		this.update = true;
+		this.setOffset(px * this.map.w - ox/this.scale, py * this.map.h - oy/this.scale);
+	},
+	resize: function(w, h) {
+		this.canvas.width = w;
+		this.canvas.height = h;
 		this.update = true;
 	},
 };
@@ -290,19 +297,15 @@ var Render3d = function(canvas, map) {
 	this.pMatrix = mat4.create();
 	this.mvMatrix = mat4.create();
 	this.nMatrix = mat3.create();
-	mat4.perspective(this.pMatrix, 45, canvas.width / canvas.height, 0.1, 100.0);
 	this.cam = [0, 0, 2.25]; // rotx, roty in deg and distance
 };
 Render3d.prototype = {
 	dim: 3,
 	initGl: function(canvas) {
 		var gl = canvas.getContext("experimental-webgl");
-		gl.viewportWidth = canvas.width;
-		gl.viewportHeight = canvas.height;
 		gl.enable(gl.DEPTH_TEST);
 		gl.clearColor(1.0, 1.0, 1.0, 1.0);
 		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
 		return gl;
 	},
 	initProg: function(gl) {
@@ -437,7 +440,6 @@ Render3d.prototype = {
 		
 		var gl = this.gl;
 		
-		gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
 		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 		gl.activeTexture(gl.TEXTURE0);
 		gl.bindTexture(gl.TEXTURE_2D, this.tx);
@@ -474,7 +476,7 @@ Render3d.prototype = {
 		this.update = true;
 	},
 	unproject: function(x, y, z, pmvi) {
-		var dest = [x*2/this.gl.viewportWidth-1, -y*2/this.gl.viewportHeight+1, z*2-1, 1.0];
+		var dest = [x*2/this.canvas.width-1, -y*2/this.canvas.height+1, z*2-1, 1.0];
 		vec4.transformMat4(dest, dest, pmvi);
 		if (!dest[3]) return null;
 		vec3.scale(dest, dest, 1/dest[3]);
@@ -533,6 +535,13 @@ Render3d.prototype = {
 	},
 	zoom: function(delta, ox, oy) {
 		this.cam[2] = Math.max(1.25, Math.min(2.5, this.cam[2]-delta));
+		this.update = true;
+	},
+	resize: function(w, h) {
+		this.canvas.width = w;
+		this.canvas.height = h;
+		mat4.perspective(this.pMatrix, 45, w / h, 0.1, 100.0);
+		this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
 		this.update = true;
 	},
 };
@@ -618,6 +627,9 @@ Quiz.prototype = {
 	},
 };
 var Control = function(game) {
+	window.addEventListener("resize", function(e) {
+		game.renderer.resize(window.innerWidth, window.innerHeight);
+	});
 	window.addEventListener("keydown", function(e) {
 		switch (e.keyIdentifier) {
 		case "Up":
@@ -639,7 +651,7 @@ var Control = function(game) {
 		game.renderer.zoom(sign * 0.25, e.offsetX, e.offsetY);
 	});
 	var dragctx, drag, dragging, drop;
-	setxy = function(e, ctx) {
+	var setxy = function(e, ctx) {
 		var t = e;
 		if (e.targetTouches && e.targetTouches.length) {
 			t = e.targetTouches[0];
@@ -649,7 +661,7 @@ var Control = function(game) {
 		ctx.x = t.clientX;
 		ctx.y = t.clientY;
 	};
-	getdist = function(e) {
+	var getdist = function(e) {
 		var dx = e.touches[0].clientX-e.touches[1].clientX;
 		var dy = e.touches[0].clientY-e.touches[1].clientY;
 		return dx * dx + dy * dy;
@@ -761,12 +773,10 @@ Game.prototype = {
 			this.layout.section.removeChild(this.canvas);
 		}
 		this.canvas = document.createElement("canvas");
-		this.canvas.width = 800;
-		this.canvas.height = 500;
 		this.layout.section.appendChild(this.canvas);
 		this.renderer = new rendererType(this.canvas, this.map);
 		Control(this);
-		this.renderer.update = true;
+		this.renderer.resize(window.innerWidth, window.innerHeight);
 	},
 	start: function(id) {
 		this.map.clear();

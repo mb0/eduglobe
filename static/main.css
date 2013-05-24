@@ -12,5 +12,12 @@ body {
 	-moz-user-select: none;
 	-ms-user-select: none;
 	user-select: none;
+}
+header {
 	font-family: Ubuntu, Arial, sans-serif;
+	color: #fff;
+	text-shadow: 1px 1px 4px #000;
+	letter-spacing: 1px;
+	background-color: rgba(127, 127, 127, 0.3);
+	position: fixed;
 }
