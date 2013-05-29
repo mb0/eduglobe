@@ -122,6 +122,7 @@ var Layer = function(data) {
 	this.capital = data.Capital;
 	this.area = data.Area;
 	this.mpoly = data.MPoly;
+	this.status = 0; // 1: error, 2: solved, 4: correct
 };
 // Map represents the map dimensions
 var Map = function(w, h) {
@@ -175,12 +176,13 @@ Map.prototype = {
 	},
 	click: function(x, y) {
 		var l = this.layerAt(x, y);
-		if (l !== null && this.onclick) {
+		if (l !== null && this.onclick && l.status === 0) {
 			this.onclick(l, x, y);
 		}
 	},
 	over: function(x, y) {
 		var l = this.layerAt(x, y);
+		if (l && l.status !== 0) l = null;
 		var changed = l !== this.overlayer;
 		if (changed) {
 			this.overlayer = l;
@@ -193,12 +195,26 @@ Map.prototype = {
 		}
 		ctx.lineWidth = 0.4;
 		ctx.strokeStyle = "#FF0000";
-		ctx.fillStyle = "rgba(60,60,60,.2)";
 		for (var i=0; i < this.layers.length; i++) {
 			var l = this.layers[i];
 			var over = l == this.overlayer;
 			if (over) {
 				ctx.fillStyle = "rgba(255,255,255,.3)";
+			} else {
+				switch (l.status) {
+				case 0:
+					ctx.fillStyle = "rgba(60,60,60,.2)";
+					break;
+				case 1:
+					ctx.fillStyle = "rgba(60,0,0,.4)";
+					break;
+				case 2:
+					ctx.fillStyle = "rgba(0,60,60,.4)";
+					break;
+				case 4:
+					ctx.fillStyle = "rgba(0,60,00,.4)";
+					break;
+				}
 			}
 			ctx.beginPath();
 			for (var j=0; j < l.mpoly.length; j++) {
@@ -206,8 +222,13 @@ Map.prototype = {
 			}
 			ctx.fill();
 			ctx.stroke();
-			if (over) {
-				ctx.fillStyle = "rgba(60,60,60,.2)";
+		}
+	},
+	reset: function(mask) {
+		for (var i=0; i < this.layers.length; i++) {
+			var l = this.layers[i];
+			if (l.status&mask !== 0) {
+				l.status = 0;
 			}
 		}
 	},
@@ -598,14 +619,7 @@ Quiz.prototype = {
 		if (l.id == this.layers[0].id) { // correct
 			this.layers.shift();
 			if (true) { // if easy mode
-				var layers = this.game.map.layers;
-				for (var i=0; i<layers.length; i++) {
-					if (layers[i] == l) {
-						layers.splice(i, 1);
-						break;
-					}
-				}
-				this.game.renderer.update = true;
+				l.status = 4;
 			}
 			if (this.layers.length > 0) {
 				this.game.ui.report("correct!", "--", this.report());
@@ -617,10 +631,14 @@ Quiz.prototype = {
 			}
 		} else { // fail
 			this.errors++;
+			l.status = 1;
+			this.game.renderer.update = true;
 			this.game.ui.report("sorry you clicked on", this.game.type == "country" ? l.name : l.capital, "--", this.report());
 		}
 	},
 	instructFind: function() {
+		this.game.map.reset(1);
+		this.game.renderer.update = true;
 		this.game.ui.instruct("find", this.game.type == "country" ? this.layers[0].name : this.layers[0].capital);
 	},
 	report: function() {
