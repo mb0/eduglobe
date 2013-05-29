@@ -244,7 +244,7 @@ var Render2d = function(canvas, map) {
 	this.scale = 0.5;
 	this.offset = {x: 0, y: 0};
 	this.ctx = canvas.getContext("2d");
-	this.update = false;
+	this.update = null;
 };
 Render2d.prototype = {
 	dim: 2,
@@ -302,6 +302,11 @@ Render2d.prototype = {
 	resize: function(w, h) {
 		this.canvas.width = w;
 		this.canvas.height = h;
+		if (this.update === null) {
+			this.setOffset(-(w/this.scale-this.map.w)/2, -(h/this.scale-this.map.h)/2);
+		} else {
+			this.setOffset(this.offset.x, this.offset.y);
+		}
 		this.update = true;
 	},
 };
