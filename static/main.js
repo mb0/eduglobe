@@ -36,8 +36,12 @@ var shuffel = function(array) {
 	return copy;
 };
 var supports = (function() {
-	var r = {canvas:false, webgl: false};
-	var c = document.createElement("canvas"),ctx;
+	var c, ctx, r = {canvas:false, webgl: false, audio: false};
+	c = document.createElement("audio");
+	if (!!c.canPlayType) {
+		r.audio = c.canPlayType('audio/ogg; codecs="vorbis"') === "probably";
+	}
+	c = document.createElement("canvas");
 	if (!!c.getContext) {
 		try {
 			ctx = c.getContext("experimental-webgl");
@@ -582,10 +586,14 @@ Select.prototype = {
 				break;
 			}
 		}
+		this.game.ui.changeType.style.display = "";
 		this.game.ui.instruct("select a region to start the quiz.");
 	},
 	clickLayer: function(l) {
 		if (l.id === "0") return;
+		if (!this.game.ui.sound.mute) {
+			this.game.ui.sound.success.play();
+		}
 		this.game.start(l.id);
 		this.game.ui.report(l.name, "quiz started!");
 	},
@@ -613,6 +621,7 @@ Quiz.prototype = {
 		this.layers = shuffel(layers);
 		this.rounds = this.layers.length;
 		this.startTime = Date.now();
+		this.game.ui.changeType.style.display = "none";
 		this.instructFind();
 	},
 	clickLayer: function(l) {
@@ -622,14 +631,23 @@ Quiz.prototype = {
 				l.status = 4;
 			}
 			if (this.layers.length > 0) {
+				if (!this.game.ui.sound.mute) {
+					this.game.ui.sound.success.play();
+				}
 				this.game.ui.report("correct!", "--", this.report());
 				this.instructFind();
 			} else {
+				if (!this.game.ui.sound.mute) {
+					this.game.ui.sound.finish.play();
+				}
 				var sec = ((Date.now() - this.startTime)/1000)|0;
 				this.game.ui.report("congratulations! you won after "+ sec +"s with "+ this.errors +" errors.");
 				this.game.start();
 			}
 		} else { // fail
+			if (!this.game.ui.sound.mute) {
+				this.game.ui.sound.fail.play();
+			}
 			this.errors++;
 			l.status = 1;
 			this.game.renderer.update = true;
@@ -756,13 +774,24 @@ var UI = function(cont, game) {
 		});
 		this.controls.appendChild(changeRenderer);
 	}
-	var changeType = document.createElement("button");
+	var changeType = this.changeType = document.createElement("button");
 	changeType.innerHTML = game.type +" quiz";
 	changeType.addEventListener("click", function() {
 		game.type = game.type == "country" ? "capital" : "country";
 		changeType.innerHTML = game.type +" quiz";
 	});
 	this.controls.appendChild(changeType);
+	var sound = this.sound = new Sound();
+	if (supports.audio) {
+		sound.load();
+		var mute = document.createElement("button");
+		mute.innerHTML = sound.mute ? "unmute" : "mute";
+		mute.addEventListener("click", function() {
+			sound.mute = !sound.mute;
+			mute.innerHTML = sound.mute ? "unmute" : "mute";
+		});
+		this.controls.appendChild(mute);
+	}
 };
 UI.prototype = {
 	instruct: function(msgs) {
@@ -771,6 +800,16 @@ UI.prototype = {
 	report: function(msgs) {
 		this.reports.innerHTML = Array.prototype.join.call(arguments, " ");
 	},
+};
+var Sound = function() {
+	this.mute = true;
+	this.load = function() {
+		var snds = ["fail", "neutral", "success", "finish"];
+		this.mute = false;
+		for (var i=0; i < snds.length; i++) {
+			this[snds[i]] = new Audio("static/sounds/"+ snds[i] +".ogg");
+		}
+	};
 };
 var Game = function(cont) {
 	this.layout = new Layout(cont);
