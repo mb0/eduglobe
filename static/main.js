@@ -687,12 +687,15 @@ var Control = function(game) {
 		}
 	});
 	game.canvas.addEventListener("mousemove", function(e) {
-		game.renderer.over(e.offsetX, e.offsetY);
+		game.renderer.over(e.clientX, e.clientY);
 	});
 	game.canvas.addEventListener("mousewheel", function(e) {
 		e.preventDefault();
-		var sign = e.wheelDelta < 0 ? -1 : 1;
-		game.renderer.zoom(sign * 0.25, e.offsetX, e.offsetY);
+		game.renderer.zoom(e.wheelDelta < 0 ? -0.25 : 0.25, e.clientX, e.clientY);
+	});
+	game.canvas.addEventListener("DOMMouseScroll", function(e) {
+		e.preventDefault();
+		game.renderer.zoom(e.detail > 0 ? -0.25 : 0.25 , e.clientX, e.clientY);
 	});
 	var dragctx, drag, dragging, drop;
 	var setxy = function(e, ctx) {
