@@ -592,7 +592,7 @@ Quiz.prototype = {
 		this.layers = shuffel(layers);
 		this.rounds = this.layers.length;
 		this.startTime = Date.now();
-		this.game.ui.instruct("find", this.layers[0].name);
+		this.instructFind();
 	},
 	clickLayer: function(l) {
 		if (l.id == this.layers[0].id) { // correct
@@ -609,7 +609,7 @@ Quiz.prototype = {
 			}
 			if (this.layers.length > 0) {
 				this.game.ui.report("correct!", "--", this.report());
-				this.game.ui.instruct("find", this.layers[0].name);
+				this.instructFind();
 			} else {
 				var sec = ((Date.now() - this.startTime)/1000)|0;
 				this.game.ui.report("congratulations! you won after "+ sec +"s with "+ this.errors +" errors.");
@@ -617,8 +617,11 @@ Quiz.prototype = {
 			}
 		} else { // fail
 			this.errors++;
-			this.game.ui.report("sorry you clicked on", l.name, "--", this.report());
+			this.game.ui.report("sorry you clicked on", this.game.type == "country" ? l.name : l.capital, "--", this.report());
 		}
+	},
+	instructFind: function() {
+		this.game.ui.instruct("find", this.game.type == "country" ? this.layers[0].name : this.layers[0].capital);
 	},
 	report: function() {
 		var round = this.rounds-this.layers.length+1;
@@ -735,6 +738,13 @@ var UI = function(cont, game) {
 		});
 		this.controls.appendChild(changeRenderer);
 	}
+	var changeType = document.createElement("button");
+	changeType.innerHTML = game.type +" quiz";
+	changeType.addEventListener("click", function() {
+		game.type = game.type == "country" ? "capital" : "country";
+		changeType.innerHTML = game.type +" quiz";
+	});
+	this.controls.appendChild(changeType);
 };
 UI.prototype = {
 	instruct: function(msgs) {
@@ -750,6 +760,7 @@ var Game = function(cont) {
 	this.canvas = null;
 	this.renderer = null;
 	this.state = null;
+	this.type = "country";
 	this.init(Render2d);
 	var g = this;
 	this.map.loadBg("static/world_day.jpg");
