@@ -4,18 +4,20 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/http"
 )
 
-var dir = "/home/mb0/go/src/github.com/mb0/eduglobe/"
+var dir = flag.String("dir", "/home/mb0/go/src/github.com/mb0/eduglobe/", "the eduglobe directory")
 
 func main() {
+	flag.Parse()
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write(index)
 	})
-	http.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.Dir(dir+"static"))))
+	http.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.Dir(*dir+"static"))))
 	err := http.ListenAndServe(":8080", nil)
 	if err != nil {
 		fmt.Println(err)
